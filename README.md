@@ -4,6 +4,10 @@ Live model-connection monitor for [opencode](https://opencode.ai) — knows whet
 
 Works alongside [retry-forever](#retry-forever): retries happen silently below the session layer, so a toast from this plugin means retries were exhausted or the failure is not retryable.
 
+![connmon panel in action](docs/screenshot-panel.png)
+
+![detail view](docs/screenshot-detail.png)
+
 ## What you get
 
 ```
