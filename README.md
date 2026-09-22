@@ -1,5 +1,7 @@
 # opencode-connection-status
 
+A small connection monitor for OpenCode — the desktop app sometimes gives no sign of whether the connection is down, so I built this.
+
 Live model-connection monitor for [opencode](https://opencode.ai) — knows whether each conversation is waiting, streaming, or silently stalled, probes the network before claiming an outage, and shows what the model is actually thinking about.
 
 Works alongside [retry-forever](#retry-forever): retries happen silently below the session layer, so a toast from this plugin means retries were exhausted or the failure is not retryable.
