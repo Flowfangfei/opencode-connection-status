@@ -1,0 +1,11 @@
+# PowerShell 5.1 compatibility (no ?? operator, no ternary)
+# Editor caches
+*.swp
+*~
+.vs/
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
