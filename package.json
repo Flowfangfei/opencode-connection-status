@@ -1,0 +1,9 @@
+{
+  "name": "opencode-connection-status",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Live model-connection monitor for opencode — per-session state, silence watchdog with network probing, thinking tail, connmon CLI viewer",
+  "scripts": {
+    "test": "node tests/plugin.test.mjs && node tests/retry-forever.test.mjs"
+  }
+}
