@@ -1,4 +1,4 @@
-# opencode-connection-status
+﻿# opencode-connection-status
 
 A small connection monitor for OpenCode — the desktop app sometimes gives no sign of whether the connection is down, so I built this.
 
@@ -199,6 +199,10 @@ Then restart opencode.
 ## Known issues
 
 - **思考状况的显示（thinking display）仍有未解决的问题**：思考内容依赖模型输出 reasoning 部分——简单问题模型不思考，面板自然没有 `思考` 行；部分模型/供应商组合可能根本不返回 reasoning（此时该功能静默失效）。另外 opencode 1.x 与 2.x 的事件名不同（`message.part.updated` vs `session.next.*.delta`），两套都已处理，但未来版本若再改事件结构需要跟进。欢迎在 issue 里报告你的模型/供应商组合下的表现。
+
+## Technical documentation
+
+Architecture, implementation details, and the full test report live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Contributing
 
