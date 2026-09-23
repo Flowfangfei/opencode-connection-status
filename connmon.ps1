@@ -200,6 +200,21 @@ function Build-SessionPanel($panel, $thin) {
     [void]$lines.Add((Line $thinkLine))
   }
 
+  # Last idle-probe result: the background check that runs while no model
+  # request is in flight, so you know the wire's state before sending anything.
+  if ($last.PSObject.Properties["lastProbeOk"] -and $null -ne $last.lastProbeOk) {
+    $probeTime = ""
+    if ($last.lastProbeAt) {
+      try { $probeTime = ([datetime]$last.lastProbeAt).ToString("HH:mm:ss") } catch { $probeTime = "" }
+    }
+    if ($last.lastProbeOk) {
+      $probeLine = @( (Seg "    探测: " "Gray"), (Seg "正常" "Green"), (Seg "  ($probeTime)" "DarkGray") )
+    } else {
+      $probeLine = @( (Seg "    探测: " "Gray"), (Seg "不通" "Red"), (Seg "  ($probeTime)" "DarkGray") )
+    }
+    [void]$lines.Add((Line $probeLine))
+  }
+
   $act = Format-Activity $panel.Samples
   if ($act) {
     $actSegs = New-Object System.Collections.Generic.List[object]

@@ -51,6 +51,8 @@ type Settings = {
   renotifyMs: number
   /** Probe timeout. */
   probeTimeoutMs: number
+  /** Background probe interval while no model request is in flight. */
+  idleProbeMs: number
 }
 
 const PATCHED = Symbol.for("opencode-connection-status.patched")
@@ -68,6 +70,7 @@ function readSettings(): Settings {
     silenceMs: numberSetting("OPENCODE_CONN_SILENCE_MS", 45_000),
     renotifyMs: numberSetting("OPENCODE_CONN_RENOTIFY_MS", 120_000),
     probeTimeoutMs: numberSetting("OPENCODE_CONN_PROBE_TIMEOUT_MS", 5_000),
+    idleProbeMs: numberSetting("OPENCODE_CONN_IDLE_PROBE_MS", 60_000),
   }
 }
 
@@ -127,6 +130,10 @@ type State = {
   isAgent: boolean
   /** Tail of the model's current reasoning text (what it is thinking about). */
   thinking: string
+  /** Last idle-probe outcome (undefined = not probed yet). */
+  lastProbeOk?: boolean
+  /** When the last idle probe ran (ms epoch). */
+  lastProbeAt: number
 }
 
 function now(): number {
@@ -149,6 +156,7 @@ function newState(sessionID: string): State {
     parentID: "",
     isAgent: false,
     thinking: "",
+    lastProbeAt: 0,
   }
 }
 
@@ -220,6 +228,8 @@ function writeStatus(state: State, extra: Record<string, unknown> = {}): void {
       parentID: state.parentID,
       isAgent: state.isAgent,
       thinking: state.thinking,
+      lastProbeOk: state.lastProbeOk,
+      lastProbeAt: state.lastProbeAt ? new Date(state.lastProbeAt).toISOString() : undefined,
       ...extra,
     })
     appendFileSync(STATUS_FILE, line + "\n")
@@ -330,6 +340,7 @@ type Tracker = {
   providerHosts: Set<string>
   inflight: Map<string, number>
   active: State | undefined
+  probeOrigins: string[]
 }
 
 function armFetchTracking(tracker: Tracker): void {
@@ -505,6 +516,55 @@ function startWatchdog(
           clearWaitIf(state, "model")
         }
       }
+
+      // Idle-time background probe: with no model request in flight, the
+      // connection can still drop, and you would only find out when the next
+      // message fails. Probe slowly (default 60s), record every result in the
+      // status file, and toast only on transitions so idle monitoring stays
+      // quiet. The stall path above handles the in-flight case; skip here
+      // while it owns the wire.
+      if (
+        !ownsInflight &&
+        tracker.probeOrigins.length > 0 &&
+        !state.probing &&
+        state.phase !== "down" &&
+        state.wait !== "tool" &&
+        state.wait !== "subtask" &&
+        t - state.lastProbeAt >= settings.idleProbeMs
+      ) {
+        state.probing = true
+        state.lastProbeAt = t
+        try {
+          let reachable = false
+          for (const origin of tracker.probeOrigins) {
+            if (await probeOrigin(origin, settings.probeTimeoutMs)) {
+              reachable = true
+              break
+            }
+          }
+          const previous = state.lastProbeOk
+          state.lastProbeOk = reachable
+          state.lastProbeAt = now()
+
+          if (reachable) {
+            writeStatus(state, { event: "idle-probe-ok" })
+            // Recovered from an idle-detected outage: say so once.
+            if (previous === false) {
+              await toast(client, "模型连接", "连接已恢复（空闲探测）", "success", 4_000)
+              writeStatus(state, { event: "idle-recovered" })
+            }
+          } else {
+            writeStatus(state, { event: "idle-probe-fail" })
+            if (previous !== false) {
+              // First failure of this outage: warn once. The user can send a
+              // message knowing it will fail, or wait.
+              await toast(client, "模型连接", "空闲探测不通 — 连接可能已中断", "warning", 6_000)
+            }
+          }
+        } finally {
+          state.probing = false
+        }
+      }
     }
   }, 5_000)
 
@@ -548,6 +608,7 @@ export const ConnectionStatus = async (input: { client?: any } = {}) => {
     providerHosts: new Set(),
     inflight: new Map(),
     active: undefined,
+    probeOrigins: [],
   }
 
   const resolveTitle = createTitleResolver(client)

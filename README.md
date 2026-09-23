@@ -123,6 +123,8 @@ connmon -IntervalSec 2   custom refresh interval
 
 **"A toast says 连接中断"** — silence plus a failed probe. Real outage. A green `连接已恢复` toast follows when output flows again.
 
+**"A toast says 空闲探测不通"** — the background probe (runs every 60s while no model request is in flight) found the provider unreachable. You can send a message knowing it may fail, or wait. One warning per outage; a green `连接已恢复（空闲探测）` toast follows when the probe succeeds again. The connmon panel shows the last probe result and time on every session (`探测: 正常 (17:52)`).
+
 ### Status file
 
 `~/.cache/opencode/connection-status/status.jsonl` — one JSON line per state change:

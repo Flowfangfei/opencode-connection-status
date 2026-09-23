@@ -29,7 +29,7 @@ const plugin = await import("file:///" + PKG + "/connection-status.ts")
 // --- mock provider origin: configurable reachability ---
 let originReachable = true
 const originHits = { n: 0 }
-const mockOrigin = createServer((req, res) => {
+let mockOrigin = createServer((req, res) => {
   originHits.n++
   if (originReachable) {
     res.writeHead(404) // any HTTP response counts as reachable
@@ -237,6 +237,57 @@ const required = ["t", "phase", "wait", "waitDetail", "waitSec", "sinceOutageMs"
 const missing = required.filter((k) => !(k in sample))
 record("14. status line schema complete", missing.length === 0, missing.length ? "missing: " + missing.join(",") : "all fields present")
 
+/* Test 15-18: idle-time background probing */
+// Fresh plugin with a short idle probe interval
+process.env.OPENCODE_CONN_IDLE_PROBE_MS = "1000"
+const idleClient = {
+  tui: { showToast: async (o) => toasts.push(o.body) },
+  config: { providers: async () => ({ data: { providers: [] } }) },
+  session: { list: async () => ({ data: [] }) },
+}
+const pluginIdle = await plugin.ConnectionStatus({ client: idleClient })
+const sendIdle = (type, properties) => pluginIdle.event({ event: { type, properties } })
+
+// Reachable origin: idle probe should fire and record idle-probe-ok.
+// originUrl's mock was closed in test 10, so create a fresh reachable one.
+const idleOrigin = createServer((req, res) => { res.writeHead(404); res.end() })
+await new Promise((r) => idleOrigin.listen(0, "127.0.0.1", r))
+const idleOriginUrl = "http://127.0.0.1:" + idleOrigin.address().port
+await pluginIdle.config({ provider: { mock: { options: { baseURL: idleOriginUrl + "/api/v3" } } } })
+originReachable = true
+await sendIdle("session.idle", { sessionID: "sesIdle" })
+const beforeIdle = readLines().filter((l) => l.sessionID === "sesIdle" && l.event === "idle-probe-ok").length
+await sleep(7000) // idleProbeMs=1000, watchdog 5s -> at least one probe
+const afterIdle = readLines().filter((l) => l.sessionID === "sesIdle" && l.event === "idle-probe-ok").length
+record("15. idle probe fires when reachable", afterIdle > beforeIdle, `${beforeIdle} -> ${afterIdle} idle-probe-ok lines`)
+
+// Unreachable: swap to hanging origin -> idle-probe-fail + warning toast (once)
+mockOrigin.close()
+const hanging2 = createServer(() => {}) // never responds
+await new Promise((r) => hanging2.listen(0, "127.0.0.1", r))
+const hanging2Url = "http://127.0.0.1:" + hanging2.address().port
+await pluginIdle.config({ provider: { mock: { options: { baseURL: hanging2Url + "/api/v3" } } } })
+toasts.length = 0
+await sleep(7000)
+const failLines = readLines().filter((l) => l.sessionID === "sesIdle" && l.event === "idle-probe-fail")
+const warnToasts = toasts.filter((t) => t.message.includes("空闲探测不通"))
+record("16. unreachable origin -> idle-probe-fail + one warning toast", failLines.length >= 1 && warnToasts.length === 1,
+  `${failLines.length} fail line(s), ${warnToasts.length} warning toast(s)`)
+
+// Still unreachable after another window: NO second warning (transition-only toasts)
+toasts.length = 0
+await sleep(7000)
+const warnToasts2 = toasts.filter((t) => t.message.includes("空闲探测不通"))
+record("17. no repeated warning while outage persists", warnToasts2.length === 0, `${warnToasts2.length} warning toast(s)`)
+
+// Recovery: swap back to the reachable origin -> idle-recovered toast
+await pluginIdle.config({ provider: { mock: { options: { baseURL: idleOriginUrl + "/api/v3" } } } })
+toasts.length = 0
+await sleep(7000)
+const recIdle = toasts.filter((t) => t.message.includes("恢复"))
+record("18. idle-detected recovery toasts once", recIdle.length === 1, recIdle[0] ? recIdle[0].message : "none")
+
+/* Cleanup */
 /* Cleanup */
 hangingOrigin.close()
 rmSync(SHIM, { recursive: true, force: true })
