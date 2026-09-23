@@ -138,6 +138,8 @@ Run `npm test` from the repository root. The suites use temporary directories fo
 
 The plugin suite verifies that an idle probe runs with no sessions and that two sessions cause one request per probe interval. It checks the warning and recovery transitions. A hanging model request produces a failed probe and a recovery toast after output resumes. The retry suite uses a 503 response followed by 200 to check request-body replay, a network error to check the attempt cap, and a mocked 2.x language hook to check retry before the first streamed part.
 
+On 2026-09-24, a fresh locally installed OpenCode 1.x server process was started with a one-second idle-probe interval and no conversation activity. Its configuration endpoint returned HTTP 200; the plugin wrote `connection-configured` followed by `idle-probe-ok` rows with `reachable: 1` and `total: 1`. The installed `connmon` command displayed the global result. The temporary server was then stopped. This confirms the installed idle path on this machine, while the running desktop processes still carry their previously loaded code.
+
 Run `npm run test:viewer` on Windows for the CLI rendering regression. Manual viewer check: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\connmon.ps1 -Once`. A sample status file can be passed with `-StatusFile`. These checks establish that the script parses and renders a snapshot; they do not establish that a running OpenCode process has reloaded a newly deployed plugin.
 
 ### Current limits
