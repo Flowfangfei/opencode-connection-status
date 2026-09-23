@@ -1,9 +1,11 @@
-# Progress
+# 项目进度
 
-Updated: 2026-09-24T00:02:17+08:00
+更新：2026-09-24T00:46:20+08:00
 
-The connection monitor and CLI viewer are implemented. The current offline suites pass 25/25 monitor checks and 18/18 retry checks; the Windows PowerShell 5.1 viewer regression passes 1/1. The three installed files match the development copies by SHA-256. A fresh OpenCode server process loaded the plugin and, with no session activity, wrote `idle-probe-ok` with 1/1 configured endpoint reachable. The installed `connmon` command displayed that global result. The smoke process was stopped afterward. Already-running desktop processes retain their old in-memory plugin code until restarted.
+README、架构说明、项目记录、知识笔记和示意图说明现已使用中文。命令、配置键、事件名和 JSON 字段保持原样，方便对照源码。本次只修改文档和 `package.json` 的项目描述；下文测试及安装证据来自此前审计，尚未因本次文案修改重新运行功能测试。
 
-The public repository contains source, tests, documentation, and synthetic illustrations. Local configuration, status data, original screenshots, and the retired handoff file stay outside tracked files.
+连接监测插件和终端查看器已实现。此前的离线测试通过了 25/25 项监测检查和 18/18 项重试检查；Windows PowerShell 5.1 查看器回归测试通过 1/1 项。三个已安装文件与开发仓库副本的 SHA-256 一致。一个新启动的 OpenCode 服务进程在没有会话活动时写入 `idle-probe-ok`，显示已配置端点可达 1/1；已安装的 `connmon` 命令显示了该进程级结果。冒烟测试进程随后已停止。此前已运行的桌面进程需要重启，才会加载新版插件代码。
 
-See [the current audit session](docs/ai-collaboration/sessions/2026-09-23-audit.md) for requirement coverage and evidence.
+公开仓库包含源码、测试、文档和合成数据示意图。本地配置、状态数据、原始截图和已撤下的交接文件均不在 Git 跟踪文件中。
+
+需求覆盖和验证证据见[审计会话记录](docs/ai-collaboration/sessions/2026-09-23-audit.md)。

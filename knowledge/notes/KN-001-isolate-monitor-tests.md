@@ -1,9 +1,9 @@
-# KN-001 — Isolate monitor tests from live status data
+# KN-001 — 将监测测试与实际状态数据隔离
 
-Type: method
+类型：方法
 
-Status: verified on 2026-09-23T23:55:00+08:00
+状态：已于 2026-09-23T23:55:00+08:00 验证
 
-The monitor writes to a user cache file by default. Tests must set `OPENCODE_CONN_STATUS_FILE` to a path inside a temporary directory before importing `connection-status.ts`. The earlier suite removed the live file while resetting its fixture and contaminated the viewer with test sessions. The revised suite uses a temporary SDK shim and status file. Its 25 monitor checks passed without touching the installed status path.
+监测插件默认写入用户缓存目录中的状态文件。测试必须在导入 `connection-status.ts` 之前，将 `OPENCODE_CONN_STATUS_FILE` 设为临时目录中的路径。旧测试套件重置测试数据时删除了实际状态文件，还让查看器出现测试会话。修订后的套件使用临时 SDK 兼容层和状态文件；25 项监测检查均通过，未触及已安装版本的状态路径。
 
-Provenance: [audit session](../../docs/ai-collaboration/sessions/2026-09-23-audit.md), [test harness](../../tests/plugin.test.mjs).
+来源：[审计会话记录](../../docs/ai-collaboration/sessions/2026-09-23-audit.md)、[测试入口](../../tests/plugin.test.mjs)。

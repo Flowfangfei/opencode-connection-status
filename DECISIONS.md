@@ -1,12 +1,12 @@
-# Decisions
+# 设计决策
 
-Updated: 2026-09-23T23:45:47+08:00
+更新：2026-09-23T23:45:47+08:00
 
-| ID | Decision | Reason |
+| ID | 决策 | 依据 |
 |---|---|---|
-| D-001 | Keep per-session activity and a separate process-wide idle probe. | Session state has an owner; endpoint reachability does not. One probe interval should not multiply with open conversations. |
-| D-002 | Describe probes as HTTP endpoint reachability. | A response from `/models`, including 401 or 404, does not prove that a model request will work. |
-| D-003 | Keep the phase timeline and activity shares; omit an upload/download throughput chart. | Available events and the fetch patch cannot reliably attribute byte counts to each concurrent session. A throughput label would imply precision the monitor does not have. |
-| D-004 | Show reasoning excerpts only when supplied by OpenCode. | The event stream does not identify which queued user message the excerpt concerns. |
-| D-005 | Keep machine-specific handoff material and real-session screenshots outside tracked files. | Public documentation can explain installation with relative paths and synthetic examples. |
-| D-006 | Run tests against temporary status files. | Tests must not modify the user's live monitor history. |
+| D-001 | 按会话记录活动，进程级空闲探测单独运行。 | 会话状态有明确归属，端点可达性没有。一个探测周期不应随着打开的会话数量增加而重复请求。 |
+| D-002 | 将探测结果表述为 HTTP 端点可达性。 | `/models` 的响应即使是 401 或 404，也不能证明模型请求会成功。 |
+| D-003 | 保留阶段时间线和活动占比，暂不添加上传下载吞吐量图。 | 现有事件和 fetch 封装无法可靠地将字节数分配给并发会话。吞吐量标签会给出超出证据的精度。 |
+| D-004 | 只在 OpenCode 提供推理内容时显示摘要。 | 事件流无法判断摘要对应哪条排队中的用户消息。 |
+| D-005 | 机器专属交接资料和真实会话截图不纳入 Git 跟踪。 | 公开文档可用相对路径和合成示例解释安装与界面。 |
+| D-006 | 测试使用临时状态文件。 | 测试不能改动用户正在使用的监测历史。 |

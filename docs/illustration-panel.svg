@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520" role="img" aria-labelledby="title desc">
-  <title id="title">Illustrative connmon terminal panel</title>
-  <desc id="desc">Synthetic example showing one reachable endpoint, two conversation panels, a nested agent, a reasoning excerpt and recent events.</desc>
+  <title id="title">connmon 终端面板示意图</title>
+  <desc id="desc">使用合成数据展示一个可达端点、两个会话、一个子代理、推理摘要和最近事件。</desc>
   <rect width="960" height="520" fill="#0d1117"/>
   <rect width="960" height="38" fill="#1b222c"/>
   <circle cx="22" cy="19" r="6" fill="#e06c75"/><circle cx="43" cy="19" r="6" fill="#e5b567"/><circle cx="64" cy="19" r="6" fill="#8ccf7e"/>
-  <text x="90" y="25" fill="#a9b6c6" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="14">connmon -Once · illustrative data</text>
+  <text x="90" y="25" fill="#a9b6c6" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="14">connmon -Once · 合成示例</text>
   <g font-family="Consolas, 'Microsoft YaHei', monospace" font-size="20">
     <text x="38" y="84" fill="#e6edf3" font-size="25" font-weight="bold">opencode 连接监测</text>
     <text x="852" y="84" fill="#8ba2b9" font-size="17">20:12:22</text>
@@ -19,8 +19,8 @@
     <path d="M38 341H922" stroke="#263341"/>
     <text x="38" y="375" fill="#8ba2b9">▸</text><text x="68" y="375" fill="#e6edf3">测试消息处理</text><text x="259" y="375" fill="#75899e" font-size="17">(ses_sample, 3s 前)</text>
     <text x="68" y="408" fill="#8ba2b9">状态:</text><text x="132" y="408" fill="#90d69c">接收输出中</text><text x="329" y="408" fill="#8ba2b9">等待:</text><text x="393" y="408" fill="#c5d0dd">-</text>
-    <text x="68" y="441" fill="#8ba2b9">思考:</text><text x="132" y="441" fill="#82c7d8">…checking the latest tool result…</text>
+    <text x="68" y="441" fill="#8ba2b9">思考:</text><text x="132" y="441" fill="#82c7d8">…正在检查最新工具结果…</text>
     <text x="68" y="473" fill="#6d8095">▒▒███▒████</text>
   </g>
-  <text x="38" y="507" fill="#6d8095" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="14">Illustrative output · synthetic session data</text>
+  <text x="38" y="507" fill="#6d8095" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="14">界面示意 · 使用合成会话数据</text>
 </svg>
