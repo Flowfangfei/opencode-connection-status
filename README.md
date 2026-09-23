@@ -204,6 +204,9 @@ Then restart opencode.
 
 ## Technical documentation
 
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — architecture, implementation details, test report
+- [HANDOFF.md](HANDOFF.md) — project locations, deployment flow, maintenance checklist (项目对接文件)
+
 Architecture, implementation details, and the full test report live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Contributing
