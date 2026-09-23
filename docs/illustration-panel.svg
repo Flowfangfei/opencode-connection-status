@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520" role="img" aria-labelledby="title desc">
+  <title id="title">Illustrative connmon terminal panel</title>
+  <desc id="desc">Synthetic example showing one reachable endpoint, two conversation panels, a nested agent, a reasoning excerpt and recent events.</desc>
+  <rect width="960" height="520" fill="#0d1117"/>
+  <rect width="960" height="38" fill="#1b222c"/>
+  <circle cx="22" cy="19" r="6" fill="#e06c75"/><circle cx="43" cy="19" r="6" fill="#e5b567"/><circle cx="64" cy="19" r="6" fill="#8ccf7e"/>
+  <text x="90" y="25" fill="#a9b6c6" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="14">connmon -Once · illustrative data</text>
+  <g font-family="Consolas, 'Microsoft YaHei', monospace" font-size="20">
+    <text x="38" y="84" fill="#e6edf3" font-size="25" font-weight="bold">opencode 连接监测</text>
+    <text x="852" y="84" fill="#8ba2b9" font-size="17">20:12:22</text>
+    <path d="M38 100H922" stroke="#344253" stroke-width="2"/>
+    <text x="38" y="137" fill="#8ba2b9">空闲探测</text><text x="156" y="137" fill="#90d69c">端点可达 1/1</text><text x="345" y="137" fill="#6d8095">· 20:12:20</text>
+    <path d="M38 158H922" stroke="#263341"/>
+    <text x="38" y="193" fill="#8ba2b9">▸</text><text x="68" y="193" fill="#e6edf3">修复登录流程</text><text x="259" y="193" fill="#75899e" font-size="17">(ses_demo, 1s 前)</text>
+    <text x="68" y="226" fill="#8ba2b9">状态:</text><text x="132" y="226" fill="#c5d0dd">空闲</text><text x="237" y="226" fill="#8ba2b9">等待:</text><text x="301" y="226" fill="#d5b777">子代理运行中</text>
+    <text x="68" y="259" fill="#8ba2b9">近况:</text><text x="132" y="259" fill="#90d69c">输出 44%</text><text x="248" y="259" fill="#647589">· 空闲 56%</text>
+    <text x="68" y="291" fill="#6d8095">█______████__________</text>
+    <text x="92" y="323" fill="#b8a5db">↳ 检查接口日志</text><text x="309" y="323" fill="#90d69c">接收输出中</text>
+    <path d="M38 341H922" stroke="#263341"/>
+    <text x="38" y="375" fill="#8ba2b9">▸</text><text x="68" y="375" fill="#e6edf3">测试消息处理</text><text x="259" y="375" fill="#75899e" font-size="17">(ses_sample, 3s 前)</text>
+    <text x="68" y="408" fill="#8ba2b9">状态:</text><text x="132" y="408" fill="#90d69c">接收输出中</text><text x="329" y="408" fill="#8ba2b9">等待:</text><text x="393" y="408" fill="#c5d0dd">-</text>
+    <text x="68" y="441" fill="#8ba2b9">思考:</text><text x="132" y="441" fill="#82c7d8">…checking the latest tool result…</text>
+    <text x="68" y="473" fill="#6d8095">▒▒███▒████</text>
+  </g>
+  <text x="38" y="507" fill="#6d8095" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="14">Illustrative output · synthetic session data</text>
+</svg>

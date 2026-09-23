@@ -4,13 +4,16 @@
 // as a mock provider origin for probe tests.
 import { registerHooks } from "node:module"
 import { createServer } from "node:http"
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { homedir } from "node:os"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
-const PKG = "D:/HuaweiMoveData/Users/86130/Documents/opencode-connection-status"
-const SHIM = PKG + "/.test-shim"
-const STATUS_FILE = join(homedir(), ".cache", "opencode", "connection-status", "status.jsonl")
+const PKG = fileURLToPath(new URL("..", import.meta.url))
+const TEST_DIR = mkdtempSync(join(tmpdir(), "opencode-conn-test-"))
+const SHIM = join(TEST_DIR, "shim")
+const STATUS_FILE = join(TEST_DIR, "status.jsonl")
+process.env.OPENCODE_CONN_STATUS_FILE = STATUS_FILE
 
 // --- SDK shim ---
 mkdirSync(SHIM, { recursive: true })
@@ -18,13 +21,13 @@ writeFileSync(SHIM + "/index.mjs", `export function createOpencodeClient(opts) {
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === "@opencode-ai/sdk") {
-      return { url: "file:///" + SHIM.replace(/\\/g, "/") + "/index.mjs", shortCircuit: true }
+      return { url: pathToFileURL(join(SHIM, "index.mjs")).href, shortCircuit: true }
     }
     return nextResolve(specifier, context)
   },
 })
 
-const plugin = await import("file:///" + PKG + "/connection-status.ts")
+const plugin = await import(pathToFileURL(join(PKG, "connection-status.ts")).href)
 
 // --- mock provider origin: configurable reachability ---
 let originReachable = true
@@ -65,12 +68,15 @@ process.env.OPENCODE_CONN_PROBE_TIMEOUT_MS = "500"
 rmSync(STATUS_FILE, { force: true })
 
 const toasts = []
+let providerCalls = 0
+const originalFetch = globalThis.fetch
 const fakeClient = {
   tui: { showToast: async (o) => toasts.push(o.body) },
-  config: { providers: async () => ({ data: { providers: [] } }) },
+  config: { providers: () => { providerCalls++; return new Promise(() => {}) } },
   session: { list: async () => ({ data: [] }) },
 }
 const plugin1 = await plugin.ConnectionStatus({ client: fakeClient })
+record("0. startup never awaits authenticated provider listing", providerCalls === 0)
 const send = (type, properties) => plugin1.event({ event: { type, properties } })
 
 // Wire the provider hosts through the config hook (this is how opencode does it)
@@ -125,6 +131,12 @@ await send("session.idle", { sessionID: "sesB" })
 const lines7 = readLines().filter((l) => l.sessionID === "sesB")
 const idleB = [...lines7].reverse().find((l) => l.event === "session-idle")
 record("7. session.idle clears thinking", idleB && idleB.thinking === "" && idleB.phase === "idle", `phase=${idleB?.phase}`)
+
+await send("message.part.updated", { part: { type: "subtask", sessionID: "sesParent" } })
+await send("message.part.updated", { part: { type: "reasoning", sessionID: "sesParent", text: "processing child result" } })
+await sleep(5100)
+const parentLast = readLines().filter((l) => l.sessionID === "sesParent").at(-1)
+record("7b. parent output clears stale subagent wait", parentLast?.wait === "none", `wait=${parentLast?.wait}`)
 
 /* Test 8: heartbeat dedup — per session, only on change */
 const countBySession = (lines) => {
@@ -237,7 +249,7 @@ const required = ["t", "phase", "wait", "waitDetail", "waitSec", "sinceOutageMs"
 const missing = required.filter((k) => !(k in sample))
 record("14. status line schema complete", missing.length === 0, missing.length ? "missing: " + missing.join(",") : "all fields present")
 
-/* Test 15-18: idle-time background probing */
+/* Test 15-19: one process-wide idle probe, even without sessions */
 // Fresh plugin with a short idle probe interval
 process.env.OPENCODE_CONN_IDLE_PROBE_MS = "1000"
 const idleClient = {
@@ -248,49 +260,63 @@ const idleClient = {
 const pluginIdle = await plugin.ConnectionStatus({ client: idleClient })
 const sendIdle = (type, properties) => pluginIdle.event({ event: { type, properties } })
 
-// Reachable origin: idle probe should fire and record idle-probe-ok.
-// originUrl's mock was closed in test 10, so create a fresh reachable one.
-const idleOrigin = createServer((req, res) => { res.writeHead(404); res.end() })
+// originUrl's mock was closed in test 10, so create a fresh configurable one.
+let idleReachable = true
+let idleHits = 0
+const idleOrigin = createServer((req, res) => {
+  idleHits++
+  if (!idleReachable) { res.destroy(); return }
+  res.writeHead(404); res.end()
+})
 await new Promise((r) => idleOrigin.listen(0, "127.0.0.1", r))
 const idleOriginUrl = "http://127.0.0.1:" + idleOrigin.address().port
 await pluginIdle.config({ provider: { mock: { options: { baseURL: idleOriginUrl + "/api/v3" } } } })
-originReachable = true
-await sendIdle("session.idle", { sessionID: "sesIdle" })
-const beforeIdle = readLines().filter((l) => l.sessionID === "sesIdle" && l.event === "idle-probe-ok").length
+const beforeIdle = readLines().filter((l) => l.scope === "connection" && l.event === "idle-probe-ok").length
 await sleep(7000) // idleProbeMs=1000, watchdog 5s -> at least one probe
-const afterIdle = readLines().filter((l) => l.sessionID === "sesIdle" && l.event === "idle-probe-ok").length
-record("15. idle probe fires when reachable", afterIdle > beforeIdle, `${beforeIdle} -> ${afterIdle} idle-probe-ok lines`)
+const afterIdle = readLines().filter((l) => l.scope === "connection" && l.event === "idle-probe-ok").length
+record("15. idle probe fires with no sessions", afterIdle > beforeIdle, `${beforeIdle} -> ${afterIdle} global probe lines`)
 
-// Unreachable: swap to hanging origin -> idle-probe-fail + warning toast (once)
-mockOrigin.close()
-const hanging2 = createServer(() => {}) // never responds
-await new Promise((r) => hanging2.listen(0, "127.0.0.1", r))
-const hanging2Url = "http://127.0.0.1:" + hanging2.address().port
-await pluginIdle.config({ provider: { mock: { options: { baseURL: hanging2Url + "/api/v3" } } } })
+await sendIdle("session.idle", { sessionID: "sesIdleA" })
+await sendIdle("session.idle", { sessionID: "sesIdleB" })
+const hitsBefore = idleHits
+await sleep(6000)
+record("15b. two sessions share one idle probe", idleHits - hitsBefore === 1, `${idleHits - hitsBefore} request(s)`)
+
+// Unreachable on the same origin -> one warning toast.
+idleReachable = false
 toasts.length = 0
 await sleep(7000)
-const failLines = readLines().filter((l) => l.sessionID === "sesIdle" && l.event === "idle-probe-fail")
-const warnToasts = toasts.filter((t) => t.message.includes("空闲探测不通"))
+const failLines = readLines().filter((l) => l.scope === "connection" && l.event === "idle-probe-fail")
+const warnToasts = toasts.filter((t) => t.message.includes("空闲探测"))
 record("16. unreachable origin -> idle-probe-fail + one warning toast", failLines.length >= 1 && warnToasts.length === 1,
   `${failLines.length} fail line(s), ${warnToasts.length} warning toast(s)`)
 
 // Still unreachable after another window: NO second warning (transition-only toasts)
 toasts.length = 0
 await sleep(7000)
-const warnToasts2 = toasts.filter((t) => t.message.includes("空闲探测不通"))
+const warnToasts2 = toasts.filter((t) => t.message.includes("空闲探测"))
 record("17. no repeated warning while outage persists", warnToasts2.length === 0, `${warnToasts2.length} warning toast(s)`)
 
-// Recovery: swap back to the reachable origin -> idle-recovered toast
-await pluginIdle.config({ provider: { mock: { options: { baseURL: idleOriginUrl + "/api/v3" } } } })
+// Recovery on the same origin -> one success toast.
+idleReachable = true
 toasts.length = 0
 await sleep(7000)
 const recIdle = toasts.filter((t) => t.message.includes("恢复"))
 record("18. idle-detected recovery toasts once", recIdle.length === 1, recIdle[0] ? recIdle[0].message : "none")
 
-/* Cleanup */
+pluginIdle.dispose()
+plugin2.dispose()
+const wrappedFetch = globalThis.fetch
+plugin1.dispose()
+record("19. dispose restores the original fetch", globalThis.fetch === originalFetch && wrappedFetch !== originalFetch)
+const reloaded = await plugin.ConnectionStatus({ client: fakeClient })
+record("20. a fresh plugin instance can track fetch again", globalThis.fetch !== originalFetch)
+reloaded.dispose()
+
 /* Cleanup */
 hangingOrigin.close()
-rmSync(SHIM, { recursive: true, force: true })
+idleOrigin.close()
+rmSync(TEST_DIR, { recursive: true, force: true })
 
 const passed = results.filter((r) => r.pass).length
 console.log(`\n=== ${passed}/${results.length} passed ===`)

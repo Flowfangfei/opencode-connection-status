@@ -1,14 +1,14 @@
 ﻿# opencode-connection-status
 
-A small connection monitor for OpenCode — the desktop app sometimes gives no sign of whether the connection is down, so I built this.
+A small connection monitor for OpenCode. The desktop app sometimes gives no clear sign when the connection drops, so I built this.
 
-Live model-connection monitor for [opencode](https://opencode.ai) — knows whether each conversation is waiting, streaming, or silently stalled, probes the network before claiming an outage, and shows what the model is actually thinking about.
+It records the activity of observed conversations, checks configured provider endpoints during long silences and idle periods, and shows a short reasoning excerpt when the provider supplies one. An endpoint response confirms reachability at that moment; it does not test authentication or model availability.
 
-Works alongside [retry-forever](#retry-forever): retries happen silently below the session layer, so a toast from this plugin means retries were exhausted or the failure is not retryable.
+Works alongside [retry-forever](#retry-forever). The two plugins report different parts of a request's life cycle.
 
-![connmon panel in action](docs/screenshot-panel.png)
+![Illustrative connmon panel with two sessions](docs/illustration-panel.svg)
 
-![detail view](docs/screenshot-detail.png)
+![Illustrative event detail and phase legend](docs/illustration-detail.svg)
 
 ## What you get
 
@@ -16,29 +16,35 @@ Works alongside [retry-forever](#retry-forever): retries happen silently below t
   ══════════════════════════════════════════════════════════════
   opencode 连接监测    20:12:22
   ══════════════════════════════════════════════════════════════
+  空闲探测  端点可达 1/1 · 20:12:20
 
-  ▸ 读取技能目录  (ses_f3bb, 1s 前)
+  ▸ 修复登录流程  (ses_demo, 1s 前)
     状态: 空闲  等待: 子代理运行中
     近况: 输出 44% · 空闲 56%
   █______████__________
-      ↳ 补译Srednicki ch35-36 [agent]  接收输出中  等待: -
-      思考: …Let me start by reading the glossary and the source file…
+      ↳ 检查接口日志  接收输出中  等待: -
   ──────────────────────────────────────────────────────────────
   最近事件:
-    17:47:04  会话空闲  [读取技能目录]
-    17:39:30  探测正常（模型在思考，网络通）  [Connect command]
+    20:12:18  会话空闲  [修复登录流程]
 ```
 
-- **Per-session panels** — every conversation (and its subagents) gets its own panel with phase, wait owner, activity percentages, and an independent timeline. Concurrent sessions never overwrite each other.
+- **Per-session panels** — observed conversations and subagents have separate phases, wait owners, activity percentages, and timelines.
 - **Wait-owner detection** — distinguishes "waiting on a tool", "waiting on a subagent", "context compacting", "provider retrying", and "waiting on the model". Long silences get different treatment depending on the owner.
-- **Silence watchdog with probing** — when a model request goes quiet for 45s with no known owner, the plugin probes the provider origin. Reachable = model is thinking (stay silent). Unreachable = real outage (error toast, recovery confirmation later).
-- **Thinking tail** — shows the last 160 chars of the model's reasoning stream while it works, so you can tell whether it is digesting the previous step's results or your latest question. Clears when the answer starts.
+- **Silence watchdog with probing** — after 45s without output on a tracked request, it checks the provider origin. A failed check raises a warning; a successful check leaves the request marked as waiting.
+- **Idle probe** — checks configured endpoints once per process at the selected interval, even before any conversation emits an event. The result appears above the session panels.
+- **Thinking tail** — displays the last 160 characters of provider-supplied reasoning while available. It clears when answer text starts. The excerpt alone cannot establish whether a queued follow-up has begun processing.
 - **Session error toasts** — classified by kind: auth failure, rate limit, 5xx, network.
 - **Status file** — `~/.cache/opencode/connection-status/status.jsonl`, one JSON line per state change, for scripting or `Get-Content -Wait`.
 
 ## Install
 
-Copy the plugin into opencode's global plugin directory:
+On Windows, run the installer from the repository root. It backs up changed installed copies and verifies SHA-256 hashes after copying:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1
+```
+
+You can also copy the plugin files manually into opencode's global plugin directory:
 
 ```powershell
 # Windows (PowerShell)
@@ -63,6 +69,7 @@ Restart opencode. The plugin auto-loads from the plugin directory; no config cha
 .\connmon.ps1              # live view, 1s refresh
 .\connmon.ps1 -Once        # single snapshot
 .\connmon.ps1 -IntervalSec 2
+.\connmon.ps1 -All             # include older sessions and all subagents
 ```
 
 Optional terminal entry point — one command in any terminal:
@@ -99,31 +106,31 @@ connmon -IntervalSec 2   custom refresh interval
 ### What each panel line means
 
 ```
-  ▸ 读取技能目录  (ses_f3bb, 1s 前)         ← session title + short id + data age
+  ▸ 修复登录流程  (ses_demo, 1s 前)         ← session title + short id + data age
     状态: 空闲  等待: 子代理运行中           ← instant phase + what it is waiting on
-    思考: …Let me start by reading…        ← tail of the model's reasoning (when thinking)
+    思考: …checking the latest tool result… ← reasoning excerpt, when supplied
     近况: 输出 44% · 空闲 56%              ← time-weighted activity over recent samples
   █______████__________                    ← phase timeline, one glyph per state change
-      ↳ 补译Srednicki ch35-36 [agent]      ← subagent nested under its parent conversation
+      ↳ 检查接口日志                        ← subagent nested under its parent conversation
 ```
 
 - **状态 (phase)** — the instant of the last sample: `空闲` idle / `等待模型响应` request sent / `接收输出中` streaming / `静默（疑似卡住）` stalled+probing / `连接中断` down.
-- **等待 (wait owner)** — what the session is waiting on: `模型思考/响应`, `工具执行 · bash (npm test)`, `子代理运行中`, `上下文压缩`, `第 N 次重试`. Long silences with a known owner are normal; silence with **no** owner triggers probing.
-- **思考 (thinking)** — appears only while the model is actually reasoning (complex tasks; simple questions skip reasoning entirely). Disappears the moment the answer starts — its presence means "still thinking", its disappearance means "answering now".
+- **等待 (wait owner)** — the last observed owner: `模型思考/响应`, `工具执行 · bash (npm test)`, `子代理运行中`, `上下文压缩`, `第 N 次重试`. A tracked model request with no other wait owner can trigger a silence probe.
+- **思考 (thinking)** — appears when the provider emits reasoning. It clears when answer text starts or the turn ends. Some models emit none.
 - **近况 (activity)** — time-weighted shares over the recent window, so an idle snapshot during an active session is not misleading.
 - **阶段时间线 (timeline)** — `█` streaming (green) / `▒` waiting (cyan) / `▓` stalled (yellow) / `X` down (red) / `_` idle (gray). Density depends on state-change frequency, so read it together with the time span in its header.
 
 ### Typical scenarios
 
-**"The main agent shows thinking but nothing happens"** — you sent a follow-up while subagents were running. The follow-up is queued: the main panel shows `等待: 子代理运行中` with no thinking line. It will process your message after the agents finish. A thinking line appearing on the main panel means it is genuinely working on your follow-up now.
+**"The main agent shows thinking but nothing happens"** — check the parent panel's wait owner and the child panels. `等待: 子代理运行中` records a dispatched subtask. New reasoning on the parent means the parent has resumed output; the monitor does not link that output to a particular queued message.
 
-**"Panel shows 静默（疑似卡住）"** — a model request went silent past the threshold and the plugin is probing the provider. If the network is reachable it stays quiet (model is thinking); if not, you get a `连接中断` error toast.
+**"Panel shows 静默（疑似卡住）"** — a tracked model request has gone quiet past the threshold and the plugin is checking the provider origin. A reachable origin leaves the request waiting; a failed check raises a toast.
 
 **"A toast says 仍在等待"** — a tool/subagent/compaction has been running longer than the renotify interval. Informational only; the wire is not involved.
 
-**"A toast says 连接中断"** — silence plus a failed probe. Real outage. A green `连接已恢复` toast follows when output flows again.
+**"A toast says 连接中断"** — the origin check failed during a silent request. A green `连接已恢复` toast follows when output flows again.
 
-**"A toast says 空闲探测不通"** — the background probe (runs every 60s while no model request is in flight) found the provider unreachable. You can send a message knowing it may fail, or wait. One warning per outage; a green `连接已恢复（空闲探测）` toast follows when the probe succeeds again. The connmon panel shows the last probe result and time on every session (`探测: 正常 (17:52)`).
+**"The idle probe warns"** — at least one configured endpoint did not answer. The header shows how many answered, with one warning per transition. It checks reachability without sending a model request.
 
 ### Status file
 
@@ -133,7 +140,7 @@ connmon -IntervalSec 2   custom refresh interval
 {"t":"2026-09-22T12:31:27.000Z","phase":"streaming","wait":"tool","waitDetail":"bash (npm test)","waitSec":12,"sinceOutageMs":0,"sessionID":"ses_…","sessionTitle":"…","parentID":"","isAgent":false,"thinking":"…"}
 ```
 
-Script it directly: `Get-Content ... -Wait -Tail 1` in PowerShell, or `tail -f` on macOS/Linux.
+Rows with `"scope":"connection"` record the process-wide idle probe. Session rows retain `sessionID` and can be tailed with `Get-Content ... -Wait -Tail 1` in PowerShell or `tail -f` on macOS/Linux.
 
 ## Configuration
 
@@ -144,6 +151,8 @@ Environment variables (all optional):
 | `OPENCODE_CONN_SILENCE_MS` | `45000` | Model silence before probing |
 | `OPENCODE_CONN_RENOTIFY_MS` | `120000` | Re-notify interval for long waits / persistent outages |
 | `OPENCODE_CONN_PROBE_TIMEOUT_MS` | `5000` | Probe request timeout |
+| `OPENCODE_CONN_IDLE_PROBE_MS` | `60000` | Idle probe interval |
+| `OPENCODE_CONN_STATUS_FILE` | user cache directory | Override the status path, useful for isolated tests |
 
 ## How it works
 
@@ -159,14 +168,14 @@ The watchdog runs every 5s over all sessions: heartbeats, stall detection, probi
 | Phase | Meaning |
 |---|---|
 | `idle` | No active turn |
-| `waiting` | Request sent, no output yet (model thinking) |
+| `waiting` | Request sent; no output observed yet |
 | `streaming` | Output flowing |
 | `stalled` | Request in flight, silent past the threshold, probing |
-| `down` | Probe failed — connection interrupted |
+| `down` | Origin probe failed during a silent request |
 
 ### Interpreting the main agent while subagents run
 
-When a main agent dispatches subagents (Task tool) and you send a follow-up message, the follow-up is queued — the main agent is not thinking about it yet. The panel shows this honestly: main session reads `等待: 子代理运行中` with no thinking line, while the agent panels carry their own streaming state and reasoning tails. A thinking line appearing on the main session means it is genuinely working on your follow-up.
+The parent panel records a dispatched subtask until the parent emits new output or the turn ends. Child panels show their own activity. This indicates which session is active; event data does not identify the exact queued user message behind a reasoning excerpt.
 
 ## retry-forever
 
@@ -192,22 +201,19 @@ Remove-Item "$env:USERPROFILE\.config\opencode\plugin\retry-forever.ts" -ErrorAc
 Remove-Item "$env:USERPROFILE\.config\opencode\connmon.ps1" -ErrorAction SilentlyContinue
 Remove-Item "$env:USERPROFILE\bin\connmon.cmd" -ErrorAction SilentlyContinue
 
-# status data
-Remove-Item "$env:USERPROFILE\.cache\opencode\connection-status" -Recurse -Force -ErrorAction SilentlyContinue
 ```
 
-Then restart opencode.
+Then restart opencode. The local status history and deployment backups remain available for inspection.
 
 ## Known issues
 
-- **思考状况的显示（thinking display）仍有未解决的问题**：思考内容依赖模型输出 reasoning 部分——简单问题模型不思考，面板自然没有 `思考` 行；部分模型/供应商组合可能根本不返回 reasoning（此时该功能静默失效）。另外 opencode 1.x 与 2.x 的事件名不同（`message.part.updated` vs `session.next.*.delta`），两套都已处理，但未来版本若再改事件结构需要跟进。欢迎在 issue 里报告你的模型/供应商组合下的表现。
+- **Thinking display still needs reports from more providers.** It depends on reasoning events, which some models do not emit. The excerpt cannot identify the exact user message being processed. OpenCode 1.x and 2.x use different event shapes; the 2.x path has offline tests but has not been verified here against a live 2.x session. Reports and PRs with a version, model, and provider type are welcome.
+- Endpoint probes test HTTP reachability. A 401 or 404 response still shows that the endpoint answered. Authentication and model generation require an actual model request.
+- The timeline shows state changes. OpenCode's available events do not supply reliable per-session upload and download byte counts, so the panel does not label its activity percentages as network throughput.
 
 ## Technical documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — architecture, implementation details, test report
-- [HANDOFF.md](HANDOFF.md) — project locations, deployment flow, maintenance checklist (项目对接文件)
-
-Architecture, implementation details, and the full test report live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — architecture, deployment, verification, and current limits
 
 ## Contributing
 

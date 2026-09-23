@@ -9,3 +9,6 @@
 # OS
 Thumbs.db
 .DS_Store
+
+# Local collaboration records may contain paths or private session data.
+docs/ai-collaboration/private/

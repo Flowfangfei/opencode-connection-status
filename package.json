@@ -1,9 +1,11 @@
 {
   "name": "opencode-connection-status",
   "version": "1.0.0",
+  "type": "module",
   "private": true,
   "description": "Live model-connection monitor for opencode — per-session state, silence watchdog with network probing, thinking tail, connmon CLI viewer",
   "scripts": {
-    "test": "node tests/plugin.test.mjs && node tests/retry-forever.test.mjs"
+    "test": "node tests/plugin.test.mjs && node tests/retry-forever.test.mjs",
+    "test:viewer": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/connmon.test.ps1"
   }
 }

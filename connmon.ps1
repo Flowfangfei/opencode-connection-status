@@ -5,14 +5,16 @@
 # Data:   ~\.cache\opencode\connection-status\status.jsonl (written by the plugin)
 param(
   [switch]$Once,
-  [int]$IntervalSec = 1
+  [int]$IntervalSec = 1,
+  [switch]$All,
+  [string]$StatusFile
 )
 
 $ErrorActionPreference = "Stop"
 # Block glyphs (█▒▓) need UTF-8 console output; PS 5.1 defaults to the ANSI
 # codepage, which silently replaces them with U+FFFD.
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$File = Join-Path $env:USERPROFILE ".cache\opencode\connection-status\status.jsonl"
+$File = if ($StatusFile) { $StatusFile } else { Join-Path $env:USERPROFILE ".cache\opencode\connection-status\status.jsonl" }
 
 $WaitLabel = @{
   model      = "模型思考/响应"
@@ -51,6 +53,12 @@ function Format-Span([int]$sec) {
   return "${sec}s"
 }
 
+function Shorten([string]$value, [int]$limit) {
+  $value = $value -replace '\s+', ' '
+  if ($value.Length -le $limit) { return $value }
+  return $value.Substring(0, $limit - 1) + '…'
+}
+
 function Get-Snapshot {
   if (-not (Test-Path $File)) { return $null }
   # Explicit UTF-8: the plugin writes UTF-8; PS 5.1 (which connmon.cmd invokes)
@@ -64,12 +72,15 @@ function Get-Snapshot {
 
   if ($events.Count -eq 0) { return $null }
 
+  $connection = @($events | Where-Object { $_.scope -eq 'connection' } | Select-Object -Last 1)
+  $sessionEvents = @($events | Where-Object { $_.scope -ne 'connection' })
+
   # Group samples by session. Subagents (isAgent) are nested under their parent
   # so each conversation renders as one panel with its agents indented below.
   # Plain arrays + foreach statement: generic Lists and ForEach-Object with
   # hashtable lookups throw "Argument types do not match" on PS 5.1.
   $bySession = @{}
-  foreach ($e in $events) {
+  foreach ($e in $sessionEvents) {
     $sid = [string]$e.sessionID
     if (-not $bySession.ContainsKey($sid)) { $bySession[$sid] = @() }
     $bySession[$sid] = $bySession[$sid] + $e
@@ -90,7 +101,7 @@ function Get-Snapshot {
       LastT     = [datetime]$last.t
     }
   }
-  $panels = @($panels | Sort-Object LastT -Descending)
+  $panels = @($panels | Where-Object { $All -or $_.LastT -ge (Get-Date).AddMinutes(-10) } | Sort-Object LastT -Descending)
 
   # Attach agent panels to their parent conversation. Plain arrays throughout:
   # generic List + string concat throws "Argument types do not match" on PS 5.1.
@@ -111,11 +122,17 @@ function Get-Snapshot {
     $roots = @($roots) + $p
   }
 
-  $notable = @($events | Where-Object { $_.event -and $_.event -ne "stalled" } | Select-Object -Last 8)
+  $cutoff = (Get-Date).AddMinutes(-10)
+  $notable = @($events | Where-Object {
+    $_.event -and $_.event -notin @('stalled', 'idle-probe-ok', 'connection-configured') -and
+    ($All -or ([datetime]$_.t) -ge $cutoff)
+  } | Select-Object -Last 6)
 
   [pscustomobject]@{
-    Panels  = $roots
+    Panels  = if ($All) { $roots } else { @($roots | Select-Object -First 5) }
     Events  = $notable
+    Connection = if ($connection.Count) { $connection[-1] } else { $null }
+    Hidden = if ($All) { 0 } else { [math]::Max(0, $roots.Count - 5) }
     AgeSec  = [int](([DateTime]::Now) - [datetime]$events[-1].t).TotalSeconds
   }
 }
@@ -156,7 +173,7 @@ function Format-Timeline($samples) {
   }
   $segs = New-Object System.Collections.Generic.List[object]
   [void]$segs.Add((Seg "  " "Gray"))
-  foreach ($s in @($samples | Select-Object -Last 30)) {
+  foreach ($s in @($samples | Select-Object -Last 24)) {
     $g = $glyphMap[[string]$s.phase]
     if (-not $g) { $g = @("?", "DarkGray") }
     [void]$segs.Add((Seg $g[0] $g[1]))
@@ -170,7 +187,7 @@ function Build-SessionPanel($panel, $thin) {
 
   # Panel header: title + short id + agent marker
   $shortID = if ($panel.SessionID) { $panel.SessionID.Substring(0, [Math]::Min(8, $panel.SessionID.Length)) } else { "legacy" }
-  $name = if ($panel.Title) { $panel.Title } else { "会话 $shortID" }
+  $name = if ($panel.Title) { Shorten $panel.Title 24 } else { "会话 $shortID" }
   $tag = if ($panel.IsAgent) { " [agent]" } else { "" }
   $age = [int](([DateTime]::Now) - $panel.LastT).TotalSeconds
   $ageC = if ($age -gt 60) { "DarkGray" } else { "DarkCyan" }
@@ -188,7 +205,7 @@ function Build-SessionPanel($panel, $thin) {
   }
   $waitKey = if ($last.wait) { $last.wait } else { "none" }
   $waitText = $WaitLabel[$waitKey]
-  if ($last.waitDetail) { $waitText += " · " + $last.waitDetail }
+  if ($last.waitDetail) { $waitText += " · " + (Shorten ([string]$last.waitDetail) 30) }
 
   [void]$lines.Add((Line (Seg "    状态: " "Gray") (Seg $phaseInfo[0] $phaseInfo[1]) (Seg "  等待: " "Gray") (Seg $waitText "White")))
 
@@ -196,7 +213,7 @@ function Build-SessionPanel($panel, $thin) {
   # Only meaningful while phase is waiting/streaming; idle sessions show nothing.
   $thinking = [string]$last.thinking
   if ($thinking -and $phase -ne "idle" -and $phase -ne "down") {
-    $thinkLine = @( (Seg "    思考: " "Gray"), (Seg "…" "DarkGray"), (Seg $thinking "DarkCyan") )
+    $thinkLine = @( (Seg "    思考: " "Gray"), (Seg "…" "DarkGray"), (Seg (Shorten $thinking 45) "DarkCyan") )
     [void]$lines.Add((Line $thinkLine))
   }
 
@@ -235,7 +252,8 @@ function Build-SessionPanel($panel, $thin) {
 
   # Nested agents under this conversation.
   if ($panel.PSObject.Properties["Agents"] -and $panel.Agents.Count -gt 0) {
-    foreach ($a in $panel.Agents) {
+    $agents = if ($All) { @($panel.Agents) } else { @($panel.Agents | Select-Object -First 3) }
+    foreach ($a in $agents) {
       $aLast = $a.Last
       $aPhase = switch ([string]$aLast.phase) {
         "streaming" { @("接收输出中", "Green") }
@@ -245,9 +263,9 @@ function Build-SessionPanel($panel, $thin) {
         "idle"      { @("空闲", "DarkGray") }
         default     { @("$($aLast.phase)", "Gray") }
       }
-      $aName = if ($a.Title) { $a.Title } else { $a.SessionID.Substring(0, [Math]::Min(8, $a.SessionID.Length)) }
+      $aName = if ($a.Title) { Shorten $a.Title 21 } else { $a.SessionID.Substring(0, [Math]::Min(8, $a.SessionID.Length)) }
       $aWait = $WaitLabel[[string]$aLast.wait]
-      if ($aLast.waitDetail) { $aWait += " · " + $aLast.waitDetail }
+      if ($aLast.waitDetail) { $aWait += " · " + (Shorten ([string]$aLast.waitDetail) 20) }
       $agentLine = @(
         (Seg "      ↳ " "DarkMagenta"),
         (Seg $aName "Magenta"),
@@ -256,6 +274,9 @@ function Build-SessionPanel($panel, $thin) {
         (Seg $aWait "DarkGray")
       )
       [void]$lines.Add((Line $agentLine))
+    }
+    if (-not $All -and $panel.Agents.Count -gt 3) {
+      [void]$lines.Add((Line (Seg "      还有 $($panel.Agents.Count - 3) 个子代理，使用 -All 查看" "DarkGray")))
     }
   }
 
@@ -281,29 +302,51 @@ function Build-Display($snap) {
     return $lines
   }
 
+  $conn = $snap.Connection
+  if ($conn -and ($conn.event -ne 'connection-configured' -or ([datetime]$conn.t) -ge (Get-Date).AddMinutes(-2))) {
+    if ($conn.event -eq 'connection-configured') {
+      $connText = if ($conn.total -gt 0) { "已配置 $($conn.total) 个端点，等待探测" } else { "未配置可探测端点" }
+      $connColor = "DarkGray"
+    } else {
+      $connText = "端点可达 $($conn.reachable)/$($conn.total)"
+      $connColor = if ($conn.reachable -eq $conn.total) { "Green" } elseif ($conn.reachable -gt 0) { "Yellow" } else { "Red" }
+      if ($conn.lastProbeAt) { $connText += " · " + ([datetime]$conn.lastProbeAt).ToString("HH:mm:ss") }
+    }
+    [void]$lines.Add((Line (Seg "  空闲探测  " "DarkGray") (Seg $connText $connColor)))
+  }
+
   [void]$lines.Add((Line))
   foreach ($panel in $snap.Panels) {
     foreach ($l in (Build-SessionPanel $panel $thin)) { [void]$lines.Add($l) }
     [void]$lines.Add((Line (Seg ("  " + $thin) "DarkGray")))
+  }
+  if ($snap.Hidden -gt 0) {
+    [void]$lines.Add((Line (Seg "  还有 $($snap.Hidden) 个会话，使用 -All 查看" "DarkGray")))
+  }
+  if ($snap.Panels.Count -eq 0) {
+    [void]$lines.Add((Line (Seg "  最近 10 分钟没有会话活动" "DarkGray")))
   }
 
   if ($snap.Events.Count -gt 0) {
     [void]$lines.Add((Line (Seg "  最近事件:" "Gray")))
     foreach ($e in $snap.Events) {
       $t = ([datetime]$e.t).ToString("HH:mm:ss")
-      $desc = switch ($e.event) {
-        "probe-ok"      { @("探测正常（模型在思考，网络通）", "DarkGreen") }
-        "probe-fail"    { @("探测失败 — 连接中断", "Red") }
-        "recovered"     { @("连接恢复", "Green") }
-        "wait-notice"   { @("长时间等待: " + $e.waitDetail, "Yellow") }
-        "session-error" { @("会话错误: " + $e.label, "Red") }
-        "session-idle"  { @("会话空闲", "DarkGray") }
-        default         { @("$($e.event)", "Gray") }
+      $descText = [string]$e.event
+      $descColor = 'Gray'
+      switch ($e.event) {
+        'probe-ok'       { $descText = '端点可达，模型请求仍未输出'; $descColor = 'DarkGreen' }
+        'probe-fail'     { $descText = '探测失败，连接可能中断'; $descColor = 'Red' }
+        'recovered'      { $descText = '输出恢复'; $descColor = 'Green' }
+        'wait-notice'    { $descText = '长时间等待: ' + $e.waitDetail; $descColor = 'Yellow' }
+        'session-error'  { $descText = '会话错误: ' + $e.label; $descColor = 'Red' }
+        'session-idle'   { $descText = '会话空闲'; $descColor = 'DarkGray' }
+        'idle-probe-fail'{ $descText = "空闲探测: $($e.reachable)/$($e.total) 可达"; $descColor = 'Yellow' }
+        'idle-recovered' { $descText = '空闲探测恢复'; $descColor = 'Green' }
       }
       $sessShort = if ($e.sessionID) { $e.sessionID.Substring(0, [Math]::Min(8, $e.sessionID.Length)) } else { "?" }
       $sessName = if ($e.sessionTitle) { $e.sessionTitle } else { $sessShort }
-      $sessTag = "  [" + $sessName + "]"
-      [void]$lines.Add((Line (Seg "    $t  " "DarkGray") (Seg $desc[0] $desc[1]) (Seg $sessTag "Magenta")))
+      $sessTag = if ($e.scope -eq 'connection') { '' } else { '  [' + (Shorten $sessName 18) + ']' }
+      [void]$lines.Add((Line (Seg "    $t  " "DarkGray") (Seg (Shorten $descText 34) $descColor) (Seg $sessTag "Magenta")))
     }
     [void]$lines.Add((Line (Seg ("  " + $thin) "DarkGray")))
   }

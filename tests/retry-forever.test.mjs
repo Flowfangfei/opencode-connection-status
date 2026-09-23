@@ -2,20 +2,24 @@
 // opencode runtime: shouldResume decision logic and createExecutionResumer
 // state machine (with injected sleep).
 import { registerHooks } from "node:module"
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
-const PKG = "D:/HuaweiMoveData/Users/86130/Documents/opencode-connection-status"
-const SHIM = PKG + "/.test-shim-rf"
+const PKG = fileURLToPath(new URL("..", import.meta.url))
+const TEST_DIR = mkdtempSync(join(tmpdir(), "opencode-retry-test-"))
+const SHIM = join(TEST_DIR, "shim")
 mkdirSync(SHIM, { recursive: true })
-writeFileSync(SHIM + "/index.mjs", "export function createOpencodeClient(o){ return { __shim: true } }\n")
+writeFileSync(join(SHIM, "index.mjs"), "export function createOpencodeClient(o){ return { __shim: true } }\n")
 registerHooks({
   resolve(s, c, next) {
-    if (s === "@opencode-ai/sdk") return { url: "file:///" + SHIM.replace(/\\/g, "/") + "/index.mjs", shortCircuit: true }
+    if (s === "@opencode-ai/sdk") return { url: pathToFileURL(join(SHIM, "index.mjs")).href, shortCircuit: true }
     return next(s, c)
   },
 })
 
-const rf = await import("file:///" + PKG.replace(/\\/g, "/") + "/retry-forever.ts")
+const rf = await import(pathToFileURL(join(PKG, "retry-forever.ts")).href)
 
 const results = []
 function record(name, pass, detail = "") {
@@ -142,7 +146,64 @@ function makeResumer(maxAttempts) {
   record("R15. missing sessionID ignored", prompts.length === 0, `${prompts.length} prompt(s)`)
 }
 
-rmSync(SHIM, { recursive: true, force: true })
+/* 1.x fetch integration: replay a Request body and stop at the attempt cap. */
+process.env.OPENCODE_RETRY_DELAY_MS = "1"
+process.env.OPENCODE_RETRY_MAX_ATTEMPTS = "3"
+process.env.OPENCODE_RETRY_VERBOSE = "false"
+const originalFetch = globalThis.fetch
+{
+  const bodies = []
+  globalThis.fetch = async (url, init) => {
+    bodies.push(await new Request(url, init).text())
+    return new Response("", { status: bodies.length === 1 ? 503 : 200 })
+  }
+  const hooks = await rf.RetryForever()
+  const response = await fetch(new Request("https://example.test/chat", { method: "POST", body: "replay me" }))
+  record("R16. 1.x fetch retries 503 with intact request body",
+    response.status === 200 && bodies.length === 2 && bodies.every((body) => body === "replay me"),
+    `statuses=503,${response.status} bodies=${bodies.length}`)
+  await hooks.dispose()
+}
+{
+  let calls = 0
+  globalThis.fetch = async () => { calls++; throw new TypeError("fetch failed") }
+  const hooks = await rf.RetryForever()
+  let failed = false
+  try { await fetch("https://example.test/chat") } catch { failed = true }
+  record("R17. 1.x network retries stop at attempt cap", failed && calls === 3, `${calls} attempt(s)`)
+  await hooks.dispose()
+}
+globalThis.fetch = originalFetch
+
+/* 2.x language hook: retry only before the first stream part. */
+let languageHook
+const setupContext = {
+  aisdk: { hook: async (kind, callback) => { if (kind === "language") languageHook = callback } },
+  event: { subscribe: async function* () {} },
+  session: { prompt: async () => {} },
+}
+await rf.setup(setupContext)
+let streamCalls = 0
+const language = {
+  doStream: async () => {
+    streamCalls++
+    if (streamCalls === 1) throw new TypeError("fetch failed")
+    return { stream: new ReadableStream({ start(controller) {
+      controller.enqueue({ type: "text-delta", text: "ok" })
+      controller.close()
+    } }) }
+  },
+}
+const hookInput = { language }
+languageHook(hookInput)
+const result = await hookInput.language.doStream({})
+const first = await result.stream.getReader().read()
+record("R18. 2.x language hook retries before stream output",
+  streamCalls === 2 && first.value?.text === "ok", `${streamCalls} attempt(s)`)
+const teardown = await rf.RetryForever()
+await teardown.dispose()
+
+rmSync(TEST_DIR, { recursive: true, force: true })
 
 const passed = results.filter((r) => r.pass).length
 console.log(`\n=== ${passed}/${results.length} passed ===`)

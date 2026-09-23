@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="340" viewBox="0 0 960 340" role="img" aria-labelledby="title desc">
+  <title id="title">Illustrative connmon event detail</title>
+  <desc id="desc">Synthetic terminal detail explaining the timeline symbols and showing a short recent event list.</desc>
+  <rect width="960" height="340" fill="#0d1117"/>
+  <rect width="960" height="38" fill="#1b222c"/>
+  <circle cx="22" cy="19" r="6" fill="#e06c75"/><circle cx="43" cy="19" r="6" fill="#e5b567"/><circle cx="64" cy="19" r="6" fill="#8ccf7e"/>
+  <text x="90" y="25" fill="#a9b6c6" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="14">connmon · recent events</text>
+  <g font-family="Consolas, 'Microsoft YaHei', monospace" font-size="20">
+    <text x="38" y="84" fill="#e6edf3" font-size="24" font-weight="bold">阶段时间线</text>
+    <text x="38" y="119" fill="#90d69c">█ 输出</text><text x="177" y="119" fill="#83bfd5">▒ 等待</text><text x="316" y="119" fill="#e3c57f">▓ 静默</text><text x="455" y="119" fill="#e68993">X 中断</text><text x="594" y="119" fill="#7f91a4">_ 空闲</text>
+    <text x="38" y="154" fill="#6d8095">▒▒███▒████____</text>
+    <path d="M38 176H922" stroke="#263341"/>
+    <text x="38" y="209" fill="#e6edf3" font-size="24" font-weight="bold">最近事件</text>
+    <text x="38" y="245" fill="#7f91a4">20:12:18</text><text x="164" y="245" fill="#c5d0dd">会话空闲</text><text x="405" y="245" fill="#b8a5db">[修复登录流程]</text>
+    <text x="38" y="278" fill="#7f91a4">20:11:54</text><text x="164" y="278" fill="#90d69c">空闲探测恢复</text>
+  </g>
+  <text x="38" y="324" fill="#6d8095" font-family="Consolas, 'Microsoft YaHei', monospace" font-size="14">Illustrative output · synthetic session data · each glyph is a state change</text>
+</svg>

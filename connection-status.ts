@@ -208,14 +208,14 @@ function createTitleResolver(client: any) {
 
 import { appendFileSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 
 const STATUS_DIR = join(homedir(), ".cache", "opencode", "connection-status")
-const STATUS_FILE = join(STATUS_DIR, "status.jsonl")
+const STATUS_FILE = process.env.OPENCODE_CONN_STATUS_FILE || join(STATUS_DIR, "status.jsonl")
 
 function writeStatus(state: State, extra: Record<string, unknown> = {}): void {
   try {
-    mkdirSync(STATUS_DIR, { recursive: true })
+    mkdirSync(dirname(STATUS_FILE), { recursive: true })
     const line = JSON.stringify({
       t: new Date().toISOString(),
       phase: state.phase,
@@ -265,6 +265,7 @@ function setWait(state: State, wait: WaitKind, detail: string): void {
   state.wait = wait
   state.waitDetail = detail
   state.waitSince = now()
+  state.lastNotifyAt = 0
 }
 
 function clearWaitIf(state: State, ...kinds: WaitKind[]): void {
@@ -340,31 +341,37 @@ type Tracker = {
   providerHosts: Set<string>
   inflight: Map<string, number>
   active: State | undefined
+  activeOrigin: string | undefined
   probeOrigins: string[]
+  probeVersion: number
 }
 
-function armFetchTracking(tracker: Tracker): void {
+function armFetchTracking(tracker: Tracker): () => void {
   const scope = globalThis as typeof globalThis & { [PATCHED]?: typeof fetch }
-  if (scope[PATCHED]) return
+  if (scope[PATCHED]) return () => {}
   scope[PATCHED] = globalThis.fetch
 
   const baseFetch = scope[PATCHED]
+  let enabled = true
   globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input)
-    let host = ""
+    let host = "", origin = ""
     try {
-      host = new URL(url).host
+      const parsed = new URL(url)
+      host = parsed.host
+      origin = parsed.origin
     } catch {
       host = ""
     }
 
-    const isModelRequest = host !== "" && tracker.providerHosts.has(host)
+    const isModelRequest = enabled && host !== "" && tracker.providerHosts.has(host)
     // Probes must not recurse through the tracker, nor extend the waiting window.
-    const isProbe = init?.headers instanceof Headers && init.headers.has("x-opencode-conn-probe")
+    const isProbe = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined)).has("x-opencode-conn-probe")
     const active = tracker.active
 
     if (isModelRequest && !isProbe && active) {
       tracker.inflight.set(host, (tracker.inflight.get(host) ?? 0) + 1)
+      tracker.activeOrigin = origin
       active.phase = active.phase === "idle" || active.phase === "down" ? "waiting" : active.phase
       active.lastOutputAt = now() // grace: a fresh request resets the silence clock
       // A fresh request supersedes a stale retry claim (opencode re-sends after
@@ -396,6 +403,12 @@ function armFetchTracking(tracker: Tracker): void {
       }
       throw error
     }
+  }
+  const wrapper = globalThis.fetch
+  return () => {
+    enabled = false
+    if (globalThis.fetch === wrapper) globalThis.fetch = baseFetch
+    delete scope[PATCHED]
   }
 }
 
@@ -433,8 +446,21 @@ function startWatchdog(
   client: any,
   lastKeys: Map<string, string>,
 ): () => void {
+  const connection = newState("__connection__")
+  let idleProbeAt = 0
+  let idleProbeOk: boolean | undefined
+  let seenProbeVersion = tracker.probeVersion
+  let running = false
   const timer = setInterval(async () => {
+    if (running) return
+    running = true
+    try {
     const t = now()
+    if (seenProbeVersion !== tracker.probeVersion) {
+      seenProbeVersion = tracker.probeVersion
+      idleProbeAt = 0
+      idleProbeOk = undefined
+    }
 
     for (const state of sessions.values()) {
       // Heartbeat first: keep the status file current on every state change so
@@ -454,7 +480,7 @@ function startWatchdog(
       // has a known owner, so report progress once per renotify interval and
       // probe nothing — the wire is not the thing on trial.
       const waitOwned = state.wait === "tool" || state.wait === "subtask" || state.wait === "compaction" || state.wait === "retry"
-      if (waitOwned && t - state.waitSince >= settings.renotifyMs) {
+      if (waitOwned && t - state.waitSince >= settings.renotifyMs && t - state.lastNotifyAt >= settings.renotifyMs) {
         state.lastNotifyAt = t
         const secs = Math.round((t - state.waitSince) / 1000)
         await toast(client, "仍在等待", `${state.waitDetail} — 已运行 ${secs}s`, "info", 5_000)
@@ -466,18 +492,19 @@ function startWatchdog(
       // owner for the silence — this is where probing earns its keep. The
       // inflight count is global; only probe on the session that owns it.
       const ownsInflight = tracker.active === state && tracker.inflight.size > 0
-      if (ownsInflight && state.phase !== "down" && t - state.lastOutputAt >= settings.silenceMs) {
+      if (ownsInflight && !waitOwned && state.phase !== "down" && t - state.lastOutputAt >= settings.silenceMs) {
         if (state.phase !== "stalled") {
           state.phase = "stalled"
           writeStatus(state, { event: "stalled" })
         }
 
-        if (state.probing || (state.outageSince > 0 && t - state.lastNotifyAt < settings.renotifyMs)) continue
+        if (state.probing || (state.lastProbeAt > 0 && t - state.lastProbeAt < settings.renotifyMs)) continue
 
         state.probing = true
+        state.lastProbeAt = t
         try {
           let reachable = false
-          for (const origin of tracker.probeOrigins) {
+          for (const origin of tracker.activeOrigin ? [tracker.activeOrigin] : tracker.probeOrigins) {
             if (await probeOrigin(origin, settings.probeTimeoutMs)) {
               reachable = true
               break
@@ -486,7 +513,7 @@ function startWatchdog(
 
           const secs = Math.round((t - state.lastOutputAt) / 1000)
           if (reachable) {
-            // Tunnel is up: model is thinking or upstream is slow. Stay silent;
+            // The origin answered; this does not prove the model request works.
             // a toast here would be noise on every long reasoning turn.
             writeStatus(state, { event: "probe-ok", silentSecs: secs })
           } else {
@@ -517,55 +544,26 @@ function startWatchdog(
         }
       }
 
-      // Idle-time background probe: with no model request in flight, the
-      // connection can still drop, and you would only find out when the next
-      // message fails. Probe slowly (default 60s), record every result in the
-      // status file, and toast only on transitions so idle monitoring stays
-      // quiet. The stall path above handles the in-flight case; skip here
-      // while it owns the wire.
-      if (
-        !ownsInflight &&
-        tracker.probeOrigins.length > 0 &&
-        !state.probing &&
-        state.phase !== "down" &&
-        state.wait !== "tool" &&
-        state.wait !== "subtask" &&
-        t - state.lastProbeAt >= settings.idleProbeMs
-      ) {
-        state.probing = true
-        state.lastProbeAt = t
-        try {
-          let reachable = false
-          for (const origin of tracker.probeOrigins) {
-            if (await probeOrigin(origin, settings.probeTimeoutMs)) {
-              reachable = true
-              break
-            }
-          }
-          const previous = state.lastProbeOk
-          state.lastProbeOk = reachable
-          state.lastProbeAt = now()
-
-          if (reachable) {
-            writeStatus(state, { event: "idle-probe-ok" })
-            // Recovered from an idle-detected outage: say so once.
-            if (previous === false) {
-              await toast(client, "模型连接", "连接已恢复（空闲探测）", "success", 4_000)
-              writeStatus(state, { event: "idle-recovered" })
-            }
-          } else {
-            writeStatus(state, { event: "idle-probe-fail" })
-            if (previous !== false) {
-              // First failure of this outage: warn once. The user can send a
-              // message knowing it will fail, or wait.
-              await toast(client, "模型连接", "空闲探测不通 — 连接可能已中断", "warning", 6_000)
-            }
-          }
-        } finally {
-          state.probing = false
-        }
+    }
+    // Probe once per process, including before the first conversation event.
+    if (tracker.inflight.size === 0 && tracker.probeOrigins.length > 0 && t - idleProbeAt >= settings.idleProbeMs) {
+      idleProbeAt = t
+      const results = await Promise.all(tracker.probeOrigins.map((origin) => probeOrigin(origin, settings.probeTimeoutMs)))
+      const reachable = results.filter(Boolean).length
+      const total = results.length
+      const allOk = reachable === total
+      const previous = idleProbeOk
+      idleProbeOk = allOk
+      connection.lastProbeOk = allOk
+      connection.lastProbeAt = now()
+      writeStatus(connection, { scope: "connection", event: allOk ? "idle-probe-ok" : "idle-probe-fail", reachable, total })
+      if (!allOk && previous !== false) await toast(client, "模型连接", `空闲探测：${reachable}/${total} 个端点可达`, "warning", 6_000)
+      if (allOk && previous === false) {
+        await toast(client, "模型连接", "端点连接已恢复（空闲探测）", "success", 4_000)
+        writeStatus(connection, { scope: "connection", event: "idle-recovered", reachable, total })
       }
     }
+    } finally { running = false }
   }, 5_000)
 
   return () => clearInterval(timer)
@@ -608,7 +606,9 @@ export const ConnectionStatus = async (input: { client?: any } = {}) => {
     providerHosts: new Set(),
     inflight: new Map(),
     active: undefined,
+    activeOrigin: undefined,
     probeOrigins: [],
+    probeVersion: 0,
   }
 
   const resolveTitle = createTitleResolver(client)
@@ -637,7 +637,7 @@ export const ConnectionStatus = async (input: { client?: any } = {}) => {
     return state
   }
 
-  armFetchTracking(tracker)
+  const stopFetchTracking = armFetchTracking(tracker)
   const stopWatchdog = startWatchdog(sessions, tracker, settings, client, lastKeys)
 
   let lastErrorKey = ""
@@ -648,6 +648,9 @@ export const ConnectionStatus = async (input: { client?: any } = {}) => {
       const { hosts, origins } = configuredProviders(config)
       tracker.providerHosts = hosts
       tracker.probeOrigins = origins
+      if (tracker.activeOrigin && !origins.includes(tracker.activeOrigin)) tracker.activeOrigin = undefined
+      tracker.probeVersion++
+      writeStatus(newState("__connection__"), { scope: "connection", event: "connection-configured", total: origins.length })
     },
     async event({ event }: { event: { type?: string; properties?: any } }) {
       // opencode 1.18 streams reasoning through message.part.updated snapshots
@@ -660,6 +663,7 @@ export const ConnectionStatus = async (input: { client?: any } = {}) => {
         if (state && delta.trim()) {
           state.lastOutputAt = now()
           state.phase = "streaming"
+          clearWaitIf(state, "subtask", "tool", "retry", "compaction")
           const merged = (state.thinking + delta).replace(/\s+/g, " ").trim()
           state.thinking = merged.slice(-160)
         }
@@ -680,6 +684,7 @@ export const ConnectionStatus = async (input: { client?: any } = {}) => {
         if (state && typeof props.delta === "string" && props.delta.trim()) {
           state.lastOutputAt = now()
           state.phase = "streaming"
+          clearWaitIf(state, "subtask", "tool", "retry", "compaction")
           state.thinking = ""
         }
         return
@@ -695,7 +700,7 @@ export const ConnectionStatus = async (input: { client?: any } = {}) => {
           // Output flowing is proof the wire is back, even if we never saw the
           // request complete: flip phase so the watchdog can announce recovery.
           state.phase = "streaming"
-          clearWaitIf(state, "retry", "compaction")
+          clearWaitIf(state, "subtask", "tool", "retry", "compaction")
           // Reasoning text IS the model's thinking — keep a short tail so the
           // viewer can show what the thinking is about. Text parts clear it:
           // once the answer starts, the thinking phase is over.
@@ -711,6 +716,7 @@ export const ConnectionStatus = async (input: { client?: any } = {}) => {
           state.lastOutputAt = now()
           state.thinking = ""
           if (state.phase !== "down") state.phase = "idle"
+          clearWaitIf(state, "subtask", "tool", "retry", "compaction", "model")
           return
         }
 
@@ -784,6 +790,7 @@ export const ConnectionStatus = async (input: { client?: any } = {}) => {
     },
     dispose: () => {
       stopWatchdog()
+      stopFetchTracking()
     },
   }
 }
