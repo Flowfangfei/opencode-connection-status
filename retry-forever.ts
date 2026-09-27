@@ -149,6 +149,11 @@ async function replayable(
 
 function createRetryingFetch(baseFetch: typeof fetch, settings: Settings): typeof fetch {
   return async function retryingFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    // Connection checks need the first HTTP response, including a 5xx. Retrying
+    // one would turn a reachable origin into a timeout and a false outage.
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+    if (headers.has("x-opencode-conn-probe")) return baseFetch(input, init)
+
     const { url, init: attemptInit } = await replayable(input, init)
     const signal = attemptInit.signal
     const host = new URL(url).host

@@ -5,7 +5,7 @@
   "private": true,
   "description": "OpenCode 连接监测：分会话状态、静默探测、思考摘要与 connmon 终端查看器",
   "scripts": {
-    "test": "node tests/plugin.test.mjs && node tests/retry-forever.test.mjs",
+    "test": "node tests/plugin.test.mjs && node tests/retry-forever.test.mjs && node tests/plugin-interaction.test.mjs",
     "test:viewer": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/connmon.test.ps1"
   }
 }

@@ -173,6 +173,27 @@ const originalFetch = globalThis.fetch
   record("R17. 1.x network retries stop at attempt cap", failed && calls === 3, `${calls} attempt(s)`)
   await hooks.dispose()
 }
+{
+  let calls = 0
+  globalThis.fetch = async () => { calls++; return new Response("", { status: 503 }) }
+  const hooks = await rf.RetryForever()
+  const response = await fetch("https://example.test/models", { headers: { "x-opencode-conn-probe": "1" } })
+  record("R17b. connection probe keeps the first HTTP response",
+    response.status === 503 && calls === 1, `${calls} request(s)`)
+  await hooks.dispose()
+}
+{
+  let calls = 0
+  globalThis.fetch = async () => { calls++; throw new TypeError("fetch failed") }
+  const hooks = await rf.RetryForever()
+  let failed = false
+  try {
+    await fetch(new Request("https://example.test/models", { headers: { "x-opencode-conn-probe": "1" } }))
+  } catch { failed = true }
+  record("R17c. Request-form connection probe does not retry network errors",
+    failed && calls === 1, `${calls} request(s)`)
+  await hooks.dispose()
+}
 globalThis.fetch = originalFetch
 
 /* 2.x language hook: retry only before the first stream part. */

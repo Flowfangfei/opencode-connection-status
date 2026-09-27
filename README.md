@@ -211,6 +211,7 @@ Remove-Item "$env:USERPROFILE\bin\connmon.cmd" -ErrorAction SilentlyContinue
 ## 技术文档
 
 - [架构与实现说明](docs/ARCHITECTURE.md)：内部工作方式、部署、验证结果和当前限制。
+- [功能实现测试报告](docs/FUNCTIONAL_TEST_REPORT_2026-09-27.md)：测试结果、已修复问题和后续修改建议。
 - [项目进度](PROGRESS.md)与[设计决策](DECISIONS.md)：当前状态和主要取舍。
 
 ## 参与改进
