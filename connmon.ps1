@@ -156,8 +156,10 @@ function Format-Activity($samples) {
   $parts = @()
   $order = @("streaming", "waiting", "stalled", "down", "idle")
   foreach ($p in $order) {
-    if (-not $spans.ContainsKey($p) -or $spans[$p] -lt 1) { continue }
-    $parts += "$($zh[$p]) $([int][math]::Round(100 * $spans[$p] / $total))%"
+    if (-not $spans.ContainsKey($p) -or $spans[$p] -le 0) { continue }
+    $percent = [int][math]::Round(100 * $spans[$p] / $total)
+    $share = if ($percent -eq 0) { '<1%' } else { "${percent}%" }
+    $parts += "$($zh[$p]) $share"
   }
   return ($parts -join " · ")
 }

@@ -20,6 +20,19 @@ try {
   if ($output -match '会话 __connection__') { throw 'Global probe was rendered as a conversation.' }
   if ($output -match 'ancient') { throw 'Stale event was shown in the recent list.' }
   Write-Host 'PASS  connmon renders global probe and complete wait event'
+
+  $outputAt = [DateTime]::UtcNow.AddSeconds(-180)
+  $idleAt = $outputAt.AddMilliseconds(80)
+  @(
+    [ordered]@{ t=$outputAt.ToString('o'); sessionID='ses_short'; sessionTitle='短会话'; phase='streaming'; wait='none'; parentID=''; isAgent=$false; thinking='' },
+    [ordered]@{ t=$idleAt.ToString('o'); sessionID='ses_short'; sessionTitle='短会话'; phase='idle'; wait='none'; parentID=''; isAgent=$false; thinking='' },
+    [ordered]@{ t=[DateTime]::UtcNow.ToString('o'); sessionID='ses_short'; sessionTitle='短会话'; phase='idle'; wait='none'; parentID=''; isAgent=$false; thinking='' }
+  ) | ForEach-Object { $_ | ConvertTo-Json -Compress } | Set-Content -LiteralPath $file -Encoding UTF8
+  $output = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $viewer -Once -StatusFile $file | Out-String)
+  if ($LASTEXITCODE -ne 0) { throw 'Short-session viewer exited with an error.' }
+  if ($output -notmatch '输出 <1%') { throw 'Sub-second output was discarded from the activity summary.' }
+  if ($output -notmatch '█_') { throw 'The first output glyph was missing after idle.' }
+  Write-Host 'PASS  connmon retains sub-second output below one percent'
 } finally {
   Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue

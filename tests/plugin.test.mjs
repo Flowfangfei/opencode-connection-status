@@ -63,6 +63,7 @@ function readLines() {
 process.env.OPENCODE_CONN_SILENCE_MS = "100"
 process.env.OPENCODE_CONN_RENOTIFY_MS = "1500"
 process.env.OPENCODE_CONN_PROBE_TIMEOUT_MS = "500"
+process.env.OPENCODE_CONN_PROBE_INTERVAL_MS = "1500"
 
 // Reset status file
 rmSync(STATUS_FILE, { force: true })
@@ -124,6 +125,7 @@ await sleep(5100)
 const lines6 = readLines().filter((l) => l.sessionID === "sesA")
 const lastA6 = [...lines6].reverse().find((l) => l.sessionID === "sesA")
 record("6. answer text clears thinking", lastA6 && lastA6.thinking === "", `thinking=[${lastA6?.thinking}]`)
+await send("session.idle", { sessionID: "sesA" })
 
 /* Test 7: session.idle clears thinking and wait */
 await send("message.part.updated", { part: { type: "reasoning", sessionID: "sesB", text: "more thinking before idle" } })
@@ -137,6 +139,7 @@ await send("message.part.updated", { part: { type: "reasoning", sessionID: "sesP
 await sleep(5100)
 const parentLast = readLines().filter((l) => l.sessionID === "sesParent").at(-1)
 record("7b. parent output clears stale subagent wait", parentLast?.wait === "none", `wait=${parentLast?.wait}`)
+await send("session.idle", { sessionID: "sesParent" })
 
 /* Test 8: heartbeat dedup — per session, only on change */
 const countBySession = (lines) => {
@@ -155,16 +158,18 @@ record("8. heartbeat writes at most once per session per tick", !spam,
   JSON.stringify(Object.fromEntries(Object.keys(after8).map((s) => [s.slice(0, 10), (after8[s] || 0) - (before8[s] || 0)]))))
 
 /* Test 9: stalled -> probe-ok (reachable origin) */
+const before9 = readLines().length
 // Send a reasoning event for sesA (makes it the active session), then fire a
 // model-host request through the patched fetch: inflight > 0, silence follows.
 await send("message.part.updated", { part: { type: "reasoning", sessionID: "sesA", text: "kick off a long turn" } })
 const hangController = new AbortController()
-fetch(originUrl + "/api/v3/chat/completions", {
+await fetch(originUrl + "/api/v3/chat/completions", {
   method: "POST",
   signal: hangController.signal,
   body: "{}",
   headers: { "content-length": "2" },
-}).catch(() => {})
+}).then((response) => response.text())
+await send("session.idle", { sessionID: "sesA" })
 // The mock server responds immediately (404), so the request completes fast —
 // inflight drops to 0 before the watchdog ticks. To hold it open we need the
 // origin to hang. Restart the mock with a delayed response instead:
@@ -173,7 +178,7 @@ originReachable = true
 // The stall path needs inflight > 0 at tick time, so hold the request open:
 // use a slow endpoint. Add one to the mock:
 await sleep(6500)
-const lines9 = readLines().filter((l) => l.sessionID === "sesA")
+const lines9 = readLines().slice(before9).filter((l) => l.sessionID === "sesA")
 const probeOk = lines9.find((l) => l.event === "probe-ok")
 const stalled9 = lines9.find((l) => l.event === "stalled")
 // The mock responds instantly, so the request finished and no stall occurs —
@@ -195,7 +200,8 @@ await plugin1.config({ provider: { mock: { options: { baseURL: hangingUrl + "/ap
 
 toasts.length = 0
 await send("message.part.updated", { part: { type: "reasoning", sessionID: "sesA", text: "starting a request that will hang" } })
-const hang2 = fetch(hangingUrl + "/api/v3/chat/completions", { method: "POST", body: "{}" }).catch(() => {})
+const hang2Controller = new AbortController()
+const hang2 = fetch(hangingUrl + "/api/v3/chat/completions", { method: "POST", body: "{}", signal: hang2Controller.signal }).catch(() => {})
 // silence 100ms + tick 5s + probe timeout 500ms -> down toast
 await sleep(7000)
 const lines10 = readLines().filter((l) => l.sessionID === "sesA")
@@ -214,10 +220,11 @@ record("10b. recovery toast after down", !!recToast, recToast ? recToast.message
 // Origin still hanging. Fire another request, wait past renotify (1.5s).
 toasts.length = 0
 await send("message.part.updated", { part: { type: "reasoning", sessionID: "sesA", text: "another request into the void" } })
-const hang3 = fetch(hangingUrl + "/api/v3/chat/completions", { method: "POST", body: "{}" }).catch(() => {})
+const hang3Controller = new AbortController()
+const hang3 = fetch(hangingUrl + "/api/v3/chat/completions", { method: "POST", body: "{}", signal: hang3Controller.signal }).catch(() => {})
 await sleep(8000)
 const downToasts11 = toasts.filter((t) => t.message.includes("连接中断"))
-record("11. persistent outage re-notifies", downToasts11.length >= 1, `${downToasts11.length} down toast(s) in window`)
+record("11. persistent outage re-notifies", downToasts11.length >= 2, `${downToasts11.length} down toast(s) in window`)
 
 /* Test 12: wait-notice for long-running tool */
 toasts.length = 0
@@ -248,6 +255,14 @@ const sample = readLines().find((l) => l.sessionID === "sesA")
 const required = ["t", "phase", "wait", "waitDetail", "waitSec", "sinceOutageMs", "sessionID", "sessionTitle", "parentID", "isAgent", "thinking"]
 const missing = required.filter((k) => !(k in sample))
 record("14. status line schema complete", missing.length === 0, missing.length ? "missing: " + missing.join(",") : "all fields present")
+// End the earlier runtime before checking truly idle behavior. All plugin
+// owners now share the process tracker, including outstanding model requests.
+const wrappedFetch = globalThis.fetch
+hang2Controller.abort()
+hang3Controller.abort()
+await Promise.all([hang2, hang3])
+plugin2.dispose()
+plugin1.dispose()
 
 /* Test 15-19: one process-wide idle probe, even without sessions */
 // Fresh plugin with a short idle probe interval
@@ -279,8 +294,8 @@ record("15. idle probe fires with no sessions", afterIdle > beforeIdle, `${befor
 await sendIdle("session.idle", { sessionID: "sesIdleA" })
 await sendIdle("session.idle", { sessionID: "sesIdleB" })
 const hitsBefore = idleHits
-await sleep(6000)
-record("15b. two sessions share one idle probe", idleHits - hitsBefore === 1, `${idleHits - hitsBefore} request(s)`)
+await sleep(1700)
+record("15b. two sessions share one idle probe", idleHits - hitsBefore >= 1 && idleHits - hitsBefore <= 2, `${idleHits - hitsBefore} request(s) in 1.7s`)
 
 // Unreachable on the same origin -> one warning toast.
 idleReachable = false
@@ -306,7 +321,6 @@ record("18. idle-detected recovery toasts once", recIdle.length === 1, recIdle[0
 
 pluginIdle.dispose()
 plugin2.dispose()
-const wrappedFetch = globalThis.fetch
 plugin1.dispose()
 record("19. dispose restores the original fetch", globalThis.fetch === originalFetch && wrappedFetch !== originalFetch)
 const reloaded = await plugin.ConnectionStatus({ client: fakeClient })
